@@ -1,6 +1,17 @@
 import Booking from "../models/Booking.js";
 import Listing from "../models/Listing.js";
 
+// Valid lifecycle progressions map
+const VALID_TRANSITIONS = {
+  requested: ["approved_pending_payment", "cancelled"],
+  approved_pending_payment: ["payment_submitted", "cancelled"],
+  payment_submitted: ["booked", "cancelled"],
+  booked: ["in_transit"],
+  in_transit: ["active_rental"],
+  active_rental: ["returned_in_transit"],
+  returned_in_transit: ["completed", "disputed"],
+};
+
 // @desc    Request a rental booking
 // @route   POST /api/bookings
 // @access  Private (Rentee)
@@ -116,7 +127,54 @@ export const getMyBookings = async (req, res) => {
   }
 };
 
-// @desc    Update booking lifecycle status
+// @desc    Get single booking details (conditionally reveals GCash info)
+// @route   GET /api/bookings/:id
+// @access  Private
+export const getBookingById = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id)
+      .populate("listing")
+      .populate("rentee", "name email phone socialLinks verification.status")
+      .populate("lender", "name email phone socialLinks");
+
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const isLender = booking.lender._id.toString() === req.user._id.toString();
+    const isRentee = booking.rentee._id.toString() === req.user._id.toString();
+
+    if (!isLender && !isRentee) {
+      return res.status(403).json({ message: "Not authorized to view this booking" });
+    }
+
+    const bookingObj = booking.toObject();
+
+    // Stages where payment details are allowed to be seen
+    const paymentUnlockedStages = [
+      "approved_pending_payment",
+      "payment_submitted",
+      "booked",
+      "in_transit",
+      "active_rental",
+      "returned_in_transit",
+      "completed",
+    ];
+
+    // If the request is still pending approval or cancelled, redact GCash info
+    if (!paymentUnlockedStages.includes(booking.status)) {
+      if (bookingObj.listing?.paymentDetails) {
+        delete bookingObj.listing.paymentDetails;
+      }
+    }
+
+    res.status(200).json(bookingObj);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Update booking lifecycle status with transition validation
 // @route   PATCH /api/bookings/:id/status
 // @access  Private
 export const updateBookingStatus = async (req, res) => {
@@ -135,26 +193,44 @@ export const updateBookingStatus = async (req, res) => {
       return res.status(403).json({ message: "Not authorized for this booking" });
     }
 
-    if (status === "approved_pending_payment" && isLender) {
+    // 1. Enforce valid state progression
+    const allowed = VALID_TRANSITIONS[booking.status] || [];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        message: `Illegal state transition from '${booking.status}' to '${status}'.`,
+      });
+    }
+
+    // 2. Enforce role-based authority per status step
+    if (status === "approved_pending_payment") {
+      if (!isLender) return res.status(403).json({ message: "Only the lender can approve this request" });
       booking.status = "approved_pending_payment";
-    } else if (status === "payment_submitted" && isRentee) {
+    } else if (status === "payment_submitted") {
+      if (!isRentee) return res.status(403).json({ message: "Only the rentee can submit payment proof" });
       booking.status = "payment_submitted";
       booking.paymentProof = {
         receiptImageUrl: paymentProof?.receiptImageUrl || "",
         referenceNumber: paymentProof?.referenceNumber || "",
         submittedAt: new Date(),
       };
-    } else if (status === "booked" && isLender) {
+    } else if (status === "booked") {
+      if (!isLender) return res.status(403).json({ message: "Only the lender can confirm incoming payment" });
       booking.status = "booked";
-    } else if (status === "in_transit" && isLender) {
+    } else if (status === "in_transit") {
+      if (!isLender) return res.status(403).json({ message: "Only the lender can dispatch outbound parcel" });
       booking.status = "in_transit";
       booking.shipping.courier = courier || "";
       booking.shipping.outboundTrackingNumber = trackingNumber || "";
-    } else if (status === "returned_in_transit" && isRentee) {
+    } else if (status === "active_rental") {
+      if (!isRentee) return res.status(403).json({ message: "Only the rentee can confirm receipt of the costume" });
+      booking.status = "active_rental";
+    } else if (status === "returned_in_transit") {
+      if (!isRentee) return res.status(403).json({ message: "Only the rentee can log return shipment" });
       booking.status = "returned_in_transit";
       booking.shipping.returnCourier = courier || "";
       booking.shipping.returnTrackingNumber = trackingNumber || "";
-    } else if (status === "completed" && isLender) {
+    } else if (status === "completed") {
+      if (!isLender) return res.status(403).json({ message: "Only the lender can finalize and refund deposit" });
       booking.status = "completed";
       if (refundData) {
         booking.depositRefund = {
@@ -162,8 +238,8 @@ export const updateBookingStatus = async (req, res) => {
           refundedAt: new Date(),
         };
       }
-    } else {
-      return res.status(400).json({ message: "Invalid status transition or role unauthorized" });
+    } else if (status === "cancelled") {
+      booking.status = "cancelled";
     }
 
     const updated = await booking.save();

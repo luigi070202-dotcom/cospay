@@ -100,7 +100,9 @@ export const getListings = async (req, res) => {
       query["location.city"] = { $regex: city, $options: "i" };
     }
 
+    // Strips paymentDetails (GCash/Maya numbers) from public browse list
     const listings = await Listing.find(query)
+      .select("-paymentDetails")
       .populate("lender", "name socialLinks verification.status")
       .sort({ createdAt: -1 });
 
@@ -115,10 +117,10 @@ export const getListings = async (req, res) => {
 // @access  Public
 export const getListingById = async (req, res) => {
   try {
-    const listing = await Listing.findById(req.params.id).populate(
-      "lender",
-      "name socialLinks verification.status"
-    );
+    // Strips paymentDetails from single public costume page
+    const listing = await Listing.findById(req.params.id)
+      .select("-paymentDetails")
+      .populate("lender", "name socialLinks verification.status");
 
     if (!listing) {
       return res.status(404).json({ message: "Listing not found" });

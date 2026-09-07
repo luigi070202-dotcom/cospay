@@ -1,36 +1,51 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import helmet from "helmet"; // 1. Import helmet
+import rateLimit from "express-rate-limit"; // 2. Import rateLimit
 import { connectDB } from "./src/config/db.js";
 import authRoutes from "./src/routes/authRoutes.js";
 import listingRoutes from "./src/routes/listingRoutes.js";
-import bookingRoutes from "./src/routes/bookingRoutes.js"; // 1. Import booking routes
+import bookingRoutes from "./src/routes/bookingRoutes.js";
 
 dotenv.config();
 connectDB();
 
 const app = express();
 
-app.use(cors());
+// Set defensive HTTP headers & hide the 'X-Powered-By: Express' signature
+app.use(helmet());
+
+// Restrict CORS to your local frontend client
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
-// --- DEBUG LOGGER ---
-app.use((req, res, next) => {
-  console.log(`📡 Incoming Request: [${req.method}] ${req.originalUrl}`);
-  next();
+// Prevent credential brute-forcing (max 20 attempts per 15 minutes per IP)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many login attempts. Please try again after 15 minutes." },
 });
+
+// Routes
+app.use("/api/auth", authLimiter, authRoutes);
+app.use("/api/listings", listingRoutes);
+app.use("/api/bookings", bookingRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.status(200).json({ status: "ok", message: "CosPay API is healthy" });
+  res.status(200).json({ status: "ok", message: "CosPay API is running" });
 });
 
-// Route Mounts
-app.use("/api/auth", authRoutes);
-app.use("/api/listings", listingRoutes);
-app.use("/api/bookings", bookingRoutes); // 2. Mount booking routes here
-
-// Catch-all 404 handler (Must stay at the bottom)
+// 404 Fallback
 app.use((req, res) => {
   res.status(404).json({
     error: "Route not found",
