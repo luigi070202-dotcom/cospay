@@ -1,32 +1,33 @@
 import mongoose from "mongoose";
 
-// Modular Add-ons (weapons, styled wigs, specialized props)
 const addOnSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, "Add-on item name is required"],
-    trim: true,
-  },
+  name: { type: String, required: true, trim: true },
   type: {
     type: String,
     enum: ["Weapon/Prop", "Wig", "Shoes", "Armor Piece", "Other"],
     default: "Weapon/Prop",
   },
-  description: {
+  description: { type: String, default: "" },
+  extraRentalFee: { type: Number, required: true, min: 0, default: 0 },
+  extraDeposit: { type: Number, min: 0, default: 0 },
+});
+
+// Sizing variant with its own specific garment measurements & individual availability
+const sizeVariantSchema = new mongoose.Schema({
+  size: {
     type: String,
-    default: "",
-    trim: true,
-  },
-  extraRentalFee: {
-    type: Number,
+    enum: ["XS", "S", "M", "L", "XL", "2XL", "Free Size", "Not Applicable"],
     required: true,
-    min: [0, "Extra rental fee cannot be negative"],
-    default: 0,
   },
-  extraDeposit: {
-    type: Number,
-    min: [0, "Extra deposit cannot be negative"],
-    default: 0,
+  bustCm: { type: Number, default: null },
+  waistCm: { type: Number, default: null },
+  hipsCm: { type: Number, default: null },
+  maxHeightCm: { type: Number, default: null },
+  shoeSizeEu: { type: Number, default: null },
+  // Per-size availability flag for personal/private use toggling
+  isAvailable: {
+    type: Boolean,
+    default: true,
   },
 });
 
@@ -37,7 +38,6 @@ const listingSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-    // Primary title / headline
     title: {
       type: String,
       required: [true, "Listing title is required"],
@@ -83,28 +83,20 @@ const listingSchema = new mongoose.Schema(
     },
     listingType: {
       type: String,
-      enum: [
-        "Full Set",
-        "Outfit Only",
-        "Wig Only",
-        "Prop Only",
-        "Accessories Only",
-      ],
+      enum: ["Full Set", "Outfit Only", "Wig Only", "Prop Only", "Accessories Only"],
       required: [true, "Listing type is required"],
       default: "Full Set",
     },
-    size: {
-      type: String,
-      enum: ["XS", "S", "M", "L", "XL", "2XL", "Free Size", "Not Applicable"],
-      default: "Free Size",
+
+    // Array of sizes, each with its dedicated measurements and individual availability
+    sizeVariants: {
+      type: [sizeVariantSchema],
+      validate: {
+        validator: (arr) => arr && arr.length > 0,
+        message: "At least one size variant must be configured",
+      },
     },
-    measurements: {
-      bustCm: { type: Number, default: null },
-      waistCm: { type: Number, default: null },
-      hipsCm: { type: Number, default: null },
-      maxHeightCm: { type: Number, default: null },
-      shoeSizeEu: { type: Number, default: null },
-    },
+
     images: {
       type: [String],
       validate: {
@@ -122,74 +114,54 @@ const listingSchema = new mongoose.Schema(
       default: "None declared by lender.",
       trim: true,
     },
-
-    // Community Rental Duration Pricing (PHP ₱)
     rentalRates: {
-      oneDay: {
-        type: Number,
-        default: null,
-        min: [0, "1-day fee cannot be negative"],
-      },
-      threeDays: {
-        type: Number,
-        required: [true, "Standard 3-day rental fee is required"],
-        min: [0, "3-day fee cannot be negative"],
-      },
-      sevenDays: {
-        type: Number,
-        default: null,
-        min: [0, "7-day fee cannot be negative"],
-      },
+      oneDay: { type: Number, default: null, min: 0 },
+      threeDays: { type: Number, required: true, min: 0 },
+      sevenDays: { type: Number, default: null, min: 0 },
     },
-
-    // Refundable Security Deposit
     securityDeposit: {
       type: Number,
       default: 0,
-      min: [0, "Security deposit cannot be negative"],
+      min: 0,
     },
-
-    // Fulfillment & Logistics
     location: {
-      city: { type: String, required: [true, "City is required"], trim: true },
-      province: {
-        type: String,
-        required: [true, "Province is required"],
-        trim: true,
-      },
+      city: { type: String, required: true, trim: true },
+      province: { type: String, required: true, trim: true },
     },
     shippingMethods: {
       type: [String],
-      default: [
-        "Same-Day Courier (Lalamove/Grab)",
-        "Standard Courier (J&T Express)",
-      ],
+      default: ["Same-Day Courier (Lalamove/Grab)", "Standard Courier (J&T Express)"],
     },
     cleaningPolicy: {
       type: String,
       default: "Do NOT wash or iron. Lender handles all cleaning upon return.",
       trim: true,
     },
-
-    // Lender Digital Wallet Payment Details
     paymentDetails: {
-      gcashName: { type: String, required: [true, "GCash name is required"] },
-      gcashNumber: {
-        type: String,
-        required: [true, "GCash number is required"],
-      },
+      gcashName: { type: String, required: true },
+      gcashNumber: { type: String, required: true },
       mayaNumber: { type: String, default: "" },
     },
+    // The listing is active if at least one variant is available
     isAvailable: {
       type: Boolean,
       default: true,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Listing = mongoose.model("Listing", listingSchema);
+// Virtual helper: flat list of available size strings
+listingSchema.virtual("availableSizes").get(function () {
+  return this.sizeVariants?.map((v) => v.size) || [];
+});
 
+listingSchema.virtual("size").get(function () {
+  return this.sizeVariants?.map((v) => v.size).join(", ") || "Free Size";
+});
+
+listingSchema.set("toJSON", { virtuals: true });
+listingSchema.set("toObject", { virtuals: true });
+
+const Listing = mongoose.model("Listing", listingSchema);
 export default Listing;

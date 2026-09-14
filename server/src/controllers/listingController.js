@@ -14,6 +14,8 @@ export const createListing = async (req, res) => {
       description,
       category,
       listingType,
+      sizeVariants,
+      availableSizes,
       size,
       measurements,
       images,
@@ -34,6 +36,28 @@ export const createListing = async (req, res) => {
         .json({ message: "Standard 3-day rental fee (threeDays) is required" });
     }
 
+    // 1. Resolve size variants with measurements & default isAvailable: true
+    let finalVariants = [];
+
+    if (listingType === "Wig Only" || listingType === "Prop Only") {
+      finalVariants = [{ size: "Not Applicable", isAvailable: true }];
+    } else if (Array.isArray(sizeVariants) && sizeVariants.length > 0) {
+      finalVariants = sizeVariants.map((v) => ({
+        ...v,
+        isAvailable: v.isAvailable !== undefined ? v.isAvailable : true,
+      }));
+    } else if (Array.isArray(availableSizes) && availableSizes.length > 0) {
+      finalVariants = availableSizes.map((sz) => ({
+        size: sz,
+        ...(measurements || {}),
+        isAvailable: true,
+      }));
+    } else if (size) {
+      finalVariants = [{ size, ...(measurements || {}), isAvailable: true }];
+    } else {
+      finalVariants = [{ size: "Free Size", ...(measurements || {}), isAvailable: true }];
+    }
+
     const listing = await Listing.create({
       lender: req.user._id,
       title,
@@ -44,11 +68,7 @@ export const createListing = async (req, res) => {
       description,
       category,
       listingType,
-      size:
-        listingType === "Wig Only" || listingType === "Prop Only"
-          ? "Not Applicable"
-          : size,
-      measurements,
+      sizeVariants: finalVariants,
       images,
       inclusions,
       addOns: addOns || [],
@@ -59,6 +79,7 @@ export const createListing = async (req, res) => {
       shippingMethods,
       cleaningPolicy,
       paymentDetails,
+      isAvailable: finalVariants.some((v) => v.isAvailable),
     });
 
     res.status(201).json(listing);
@@ -92,15 +113,17 @@ export const getListings = async (req, res) => {
       query.listingType = listingType;
     }
 
+    // Match only if the specific size variant exists AND is currently available
     if (size && size !== "All") {
-      query.size = size;
+      query.sizeVariants = {
+        $elemMatch: { size: size, isAvailable: true },
+      };
     }
 
     if (city) {
       query["location.city"] = { $regex: city, $options: "i" };
     }
 
-    // Strips paymentDetails (GCash/Maya numbers) from public browse list
     const listings = await Listing.find(query)
       .select("-paymentDetails")
       .populate("lender", "name socialLinks verification.status")
@@ -117,7 +140,6 @@ export const getListings = async (req, res) => {
 // @access  Public
 export const getListingById = async (req, res) => {
   try {
-    // Strips paymentDetails from single public costume page
     const listing = await Listing.findById(req.params.id)
       .select("-paymentDetails")
       .populate("lender", "name socialLinks verification.status");
@@ -181,6 +203,56 @@ export const deleteListing = async (req, res) => {
     await listing.deleteOne();
 
     res.status(200).json({ message: "Listing deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Toggle costume availability for a SPECIFIC size variant (e.g., Size M in private use)
+// @route   PATCH /api/listings/:id/toggle-size-availability
+// @access  Private (Listing owner only)
+export const toggleSizeAvailability = async (req, res) => {
+  try {
+    const { variantId, size } = req.body;
+    const listing = await Listing.findById(req.params.id);
+
+    if (!listing) {
+      return res.status(404).json({ message: "Listing not found" });
+    }
+
+    if (listing.lender.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to modify this listing" });
+    }
+
+    // Locate the exact size variant subdocument
+    const targetVariant = listing.sizeVariants.find(
+      (v) =>
+        (variantId && v._id.toString() === variantId.toString()) ||
+        (size && v.size === size)
+    );
+
+    if (!targetVariant) {
+      return res
+        .status(404)
+        .json({ message: "Size variant not found on this listing" });
+    }
+
+    targetVariant.isAvailable = !targetVariant.isAvailable;
+
+    // Overall listing stays in the catalog if at least one size variant remains rentable
+    listing.isAvailable = listing.sizeVariants.some((v) => v.isAvailable);
+
+    await listing.save();
+
+    res.status(200).json({
+      message: `Size ${targetVariant.size} marked as ${
+        targetVariant.isAvailable ? "Available" : "Unavailable (Private Use)"
+      }`,
+      sizeVariants: listing.sizeVariants,
+      isAvailable: listing.isAvailable,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

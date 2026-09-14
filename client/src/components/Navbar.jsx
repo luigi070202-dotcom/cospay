@@ -25,7 +25,7 @@ export default function Navbar() {
               Cos<span className="text-brand-peso">Pay</span>
             </span>
             <span className="text-[9px] font-bold tracking-widest text-brand-muted uppercase">
-              Rental & Escrow
+              Cosplay
             </span>
           </div>
         </Link>

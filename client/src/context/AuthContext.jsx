@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect } from "react";
 
-const AuthContext = createContext();
+// 1. Add "export" here so named imports like { AuthContext } work
+export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -39,5 +40,7 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-// Custom Hook to access auth state anywhere with: const { user, logout } = useAuth();
+// Custom Hook to access auth state anywhere
 export const useAuth = () => useContext(AuthContext);
+
+export default AuthContext;

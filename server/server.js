@@ -1,35 +1,49 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import helmet from "helmet"; // 1. Import helmet
-import rateLimit from "express-rate-limit"; // 2. Import rateLimit
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { connectDB } from "./src/config/db.js";
 import authRoutes from "./src/routes/authRoutes.js";
 import listingRoutes from "./src/routes/listingRoutes.js";
 import bookingRoutes from "./src/routes/bookingRoutes.js";
+import uploadRoutes from "./src/routes/uploadRoutes.js";
 
 dotenv.config();
 connectDB();
 
 const app = express();
 
-// Set defensive HTTP headers & hide the 'X-Powered-By: Express' signature
-app.use(helmet());
+// 1. Configure Helmet to allow cross-origin image loading (Cloudinary / Unsplash)
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
+  })
+);
 
-// Restrict CORS to your local frontend client
+// 2. Restrict CORS to your local frontend client
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:5173",
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
 app.use(express.json());
 
-// Prevent credential brute-forcing (max 20 attempts per 15 minutes per IP)
+// 3. Debug Logger to inspect every incoming request
+app.use((req, res, next) => {
+  console.log(`📡 Incoming Request: [${req.method}] ${req.originalUrl}`);
+  next();
+});
+
+// 4. Prevent credential brute-forcing
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // 20 attempts
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: "Too many login attempts. Please try again after 15 minutes." },
@@ -39,6 +53,7 @@ const authLimiter = rateLimit({
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/listings", listingRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
